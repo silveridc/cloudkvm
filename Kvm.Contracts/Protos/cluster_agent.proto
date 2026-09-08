@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+option csharp_namespace = "Kvm.Contracts";
+package kvm.cluster.v1;
+
+service ClusterAgent {
+  rpc GetHostStatus(HostStatusRequest) returns (HostStatusReply);
+  rpc ListVirtualMachines(ListVirtualMachinesRequest) returns (ListVirtualMachinesReply);
+  rpc GetVirtualMachine(VirtualMachineRequest) returns (VirtualMachineReply);
+  rpc ChangeVirtualMachinePowerState(ChangePowerStateRequest) returns (ChangePowerStateReply);
+  rpc ListNetworks(ListNetworksRequest) returns (ListNetworksReply);
+  rpc CreateBridge(CreateBridgeRequest) returns (NetworkReply);
+  rpc DeleteBridge(DeleteBridgeRequest) returns (google.protobuf.Empty);
+  rpc ListNatRules(ListNatRulesRequest) returns (ListNatRulesReply);
+  rpc CreateNatRule(CreateNatRuleRequest) returns (NatRuleReply);
+  rpc DeleteNatRule(DeleteNatRuleRequest) returns (google.protobuf.Empty);
+  rpc CreateVirtualMachine(CreateVirtualMachineRequest) returns (VirtualMachineReply);
+  rpc DeleteVirtualMachine(DeleteVirtualMachineRequest) returns (google.protobuf.Empty);
+  rpc OpenVncConsole(OpenVncConsoleRequest) returns (OpenVncConsoleReply);
+  rpc ProxyVnc(stream VncProxyFrame) returns (stream VncProxyFrame);
+}
+
+message HostStatusRequest {}
+
+message HostStatusReply {
+  string host_name = 1;
+  string libvirt_uri = 2;
+  string hypervisor_type = 3;
+  string hypervisor_version = 4;
+}
+
+message ListVirtualMachinesRequest {}
+
+message VirtualMachineRequest {
+  string name = 1;
+}
+
+enum VirtualMachineState {
+  VIRTUAL_MACHINE_STATE_UNSPECIFIED = 0;
+  VIRTUAL_MACHINE_STATE_RUNNING = 1;
+  VIRTUAL_MACHINE_STATE_BLOCKED = 2;
+  VIRTUAL_MACHINE_STATE_PAUSED = 3;
+  VIRTUAL_MACHINE_STATE_SHUTDOWN = 4;
+  VIRTUAL_MACHINE_STATE_SHUTOFF = 5;
+  VIRTUAL_MACHINE_STATE_CRASHED = 6;
+  VIRTUAL_MACHINE_STATE_PMSUSPENDED = 7;
+}
+
+message VirtualMachine {
+  string name = 1;
+  string uuid = 2;
+  int32 id = 3;
+  VirtualMachineState state = 4;
+  uint64 memory_mib = 5;
+  uint32 virtual_cpu_count = 6;
+  bool persistent = 7;
+}
+
+message ListVirtualMachinesReply {
+  repeated VirtualMachine virtual_machines = 1;
+}
+
+message VirtualMachineReply {
+  VirtualMachine virtual_machine = 1;
+}
+
+enum VirtualMachinePowerAction {
+  VIRTUAL_MACHINE_POWER_ACTION_UNSPECIFIED = 0;
+  VIRTUAL_MACHINE_POWER_ACTION_START = 1;
+  VIRTUAL_MACHINE_POWER_ACTION_SHUTDOWN = 2;
+  VIRTUAL_MACHINE_POWER_ACTION_REBOOT = 3;
+  VIRTUAL_MACHINE_POWER_ACTION_FORCE_OFF = 4;
+}
+
+message ChangePowerStateRequest {
+  string name = 1;
+  VirtualMachinePowerAction action = 2;
+}
+
+message ChangePowerStateReply {
+  VirtualMachine virtual_machine = 1;
+}
+
+enum BridgeType {
+  BRIDGE_TYPE_UNSPECIFIED = 0;
+  BRIDGE_TYPE_LINUX = 1;
+  BRIDGE_TYPE_OPEN_VSWITCH = 2;
+}
+
+message ListNetworksRequest {}
+
+message Network {
+  string name = 1;
+  BridgeType type = 2;
+  repeated string ports = 3;
+  bool up = 4;
+}
+
+message ListNetworksReply {
+  repeated Network networks = 1;
+}
+
+message CreateBridgeRequest {
+  string name = 1;
+  BridgeType type = 2;
+  repeated string ports = 3;
+}
+
+message DeleteBridgeRequest {
+  string name = 1;
+  BridgeType type = 2;
+}
+
+message NatRule {
+  string id = 1;
+  string protocol = 2;
+  string listen_address = 3;
+  uint32 listen_port = 4;
+  string target_address = 5;
+  uint32 target_port = 6;
+}
+
+message ListNatRulesRequest {}
+
+message ListNatRulesReply {
+  repeated NatRule rules = 1;
+}
+
+message CreateNatRuleRequest {
+  string protocol = 1;
+  string listen_address = 2;
+  uint32 listen_port = 3;
+  string target_address = 4;
+  uint32 target_port = 5;
+}
+
+message DeleteNatRuleRequest {
+  string id = 1;
+}
+
+message NetworkReply {
+  Network network = 1;
+}
+
+message NatRuleReply {
+  NatRule rule = 1;
+}
+
+message CreateVirtualMachineRequest {
+  string name = 1;
+  uint64 memory_mib = 2;
+  uint32 virtual_cpu_count = 3;
+  string base_image = 4;
+  string bridge_name = 5;
+  string mac_address = 6;
+  CloudInitConfig cloud_init = 7;
+  bool start = 8;
+}
+
+message DeleteVirtualMachineRequest {
+  string name = 1;
+  bool force = 2;
+  bool delete_storage = 3;
+}
+
+message CloudInitConfig {
+  string user_name = 1;
+  repeated string ssh_authorized_keys = 2;
+  string ipv4_address = 3;
+  string ipv4_gateway = 4;
+  repeated string dns_servers = 5;
+  string search_domain = 6;
+}
+
+message OpenVncConsoleRequest {
+  string name = 1;
+}
+
+message OpenVncConsoleReply {
+  string session_id = 1;
+}
+
+message VncProxyFrame {
+  string session_id = 1;
+  bytes data = 2;
+}

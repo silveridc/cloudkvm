@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>KVM Console</title>
+    <style>
+        html, body, #screen { height: 100%; margin: 0; background: #1d1f21; }
+    </style>
+</head>
+<body>
+    <div id="screen"></div>
+    <script type="module">
+        import RFB from './core/rfb.js';
+
+        const token = new URLSearchParams(window.location.search).get('ticket');
+        if (!token) {
+            document.body.textContent = 'Missing console ticket.';
+            throw new Error('Missing console ticket.');
+        }
+
+        const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const url = `${scheme}://${window.location.host}/api/v1/consoles/${encodeURIComponent(token)}`;
+        const rfb = new RFB(document.getElementById('screen'), url);
+        rfb.scaleViewport = true;
+        rfb.resizeSession = true;
+        rfb.addEventListener('desktopname', event => { document.title = event.detail.name; });
+    </script>
+</body>
+</html>

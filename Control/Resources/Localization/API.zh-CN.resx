@@ -1,0 +1,184 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- 
+    Microsoft ResX Schema 
+    
+    Version 2.0
+    
+    The primary goals of this format is to allow a simple XML format 
+    that is mostly human readable. The generation and parsing of the 
+    various data types are done through the TypeConverter classes 
+    associated with the data types.
+    
+    Example:
+    
+    ... ado.net/XML headers & schema ...
+    <resheader name="resmimetype">text/microsoft-resx</resheader>
+    <resheader name="version">2.0</resheader>
+    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
+    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
+    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
+    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
+    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
+        <value>[base64 mime encoded serialized .NET Framework object]</value>
+    </data>
+    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
+        <comment>This is a comment</comment>
+    </data>
+                
+    There are any number of "resheader" rows that contain simple 
+    name/value pairs.
+    
+    Each data row contains a name, and value. The row also contains a 
+    type or mimetype. Type corresponds to a .NET class that support 
+    text/value conversion through the TypeConverter architecture. 
+    Classes that don't support this are serialized and stored with the 
+    mimetype set.
+    
+    The mimetype is used for serialized objects, and tells the 
+    ResXResourceReader how to depersist the object. This is currently not 
+    extensible. For a given mimetype the value must be set accordingly:
+    
+    Note - application/x-microsoft.net.object.binary.base64 is the format 
+    that the ResXResourceWriter will generate, however the reader can 
+    read any of the formats listed below.
+    
+    mimetype: application/x-microsoft.net.object.binary.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
+            : and then encoded with base64 encoding.
+    
+    mimetype: application/x-microsoft.net.object.soap.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
+            : and then encoded with base64 encoding.
+
+    mimetype: application/x-microsoft.net.object.bytearray.base64
+    value   : The object must be serialized into a byte array 
+            : using a System.ComponentModel.TypeConverter
+            : and then encoded with base64 encoding.
+    -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <data name="bad_requests" xml:space="preserve">
+    <value>请求出现异常</value>
+  </data>
+  <data name="display_flag" xml:space="preserve">
+    <value>CN</value>
+    <comment>旗帜渲染使用</comment>
+  </data>
+  <data name="display_name" xml:space="preserve">
+    <value>cn-zh</value>
+  </data>
+  <data name="route_not_found" xml:space="preserve">
+    <value>请求地址有误</value>
+  </data>
+  <data name="success_message" xml:space="preserve">
+    <value>请求成功</value>
+  </data>
+  <data name="request_error" xml:space="preserve">
+    <value>请求参数错误</value>
+  </data>
+  <data name="resource_not_found" xml:space="preserve">
+    <value>资源不存在</value>
+  </data>
+  <data name="admin_authentication_failed" xml:space="preserve">
+    <value>管理接口认证失败</value>
+  </data>
+  <data name="cluster_request_failed" xml:space="preserve">
+    <value>节点请求失败</value>
+  </data>
+  <data name="invalid_value" xml:space="preserve">
+    <value>提供的值无效</value>
+  </data>
+  <data name="invalid_power_action" xml:space="preserve">
+    <value>操作必须为 start、shutdown、reboot 或 force-off</value>
+  </data>
+  <data name="invalid_bridge_type" xml:space="preserve">
+    <value>类型必须为 linux 或 open-vswitch</value>
+  </data>
+  <data name="invalid_idempotency_key" xml:space="preserve">
+    <value>必须提供 Idempotency-Key，且长度不能超过 128 个字符</value>
+  </data>
+  <data name="idempotency_conflict" xml:space="preserve">
+    <value>该 Idempotency-Key 已用于其他请求</value>
+  </data>
+  <data name="operation_queue_full" xml:space="preserve">
+    <value>操作队列已满</value>
+  </data>
+  <data name="operation_accepted" xml:space="preserve">
+    <value>操作已受理</value>
+  </data>
+  <data name="invalid_wait_seconds" xml:space="preserve">
+    <value>waitSeconds 必须在 0 到 30 之间</value>
+  </data>
+  <data name="method_not_allowed" xml:space="preserve">
+    <value>请求方法不允许</value>
+  </data>
+  <data name="internal_error" xml:space="preserve">
+    <value>服务器内部错误</value>
+  </data>
+  <data name="operation_owner_lost" xml:space="preserve">
+    <value>任务所属主控在完成前离线，操作结果可能未知</value>
+  </data>
+  <data name="sock_remove_fail" xml:space="preserve">
+    <value>sock文件移除失败</value>
+  </data>
+</root>

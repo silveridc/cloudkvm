@@ -3,5 +3,6 @@
     <File Path=".editorconfig" />
   </Folder>
   <Project Path="Cluster/Cluster.csproj" />
-  <Project Path="ControlMain/ControlMain.csproj" />
+  <Project Path="Control/Control.csproj" />
+  <Project Path="Kvm.Contracts/Kvm.Contracts.csproj" />
 </Solution>
