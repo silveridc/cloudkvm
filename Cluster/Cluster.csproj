@@ -7,9 +7,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="Controllers\ApiController.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
     <PackageReference Include="Microsoft.OpenApi" Version="2.12.2" />
+	<PackageReference Include="Sentry.AspNetCore" Version="6.6.0" />
   </ItemGroup>
 
   <ItemGroup>

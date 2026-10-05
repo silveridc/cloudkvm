@@ -2,6 +2,7 @@ using Control.Model.Response;
 
 namespace Control;
 
+/// <summary>把未处理异常与 404/405 响应统一包装成 JSON API 响应的中间件。</summary>
 public sealed class ApiResponseMiddleware(RequestDelegate next, ILogger<ApiResponseMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)

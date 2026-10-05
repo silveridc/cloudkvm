@@ -1,8 +1,11 @@
 using Grpc.Core;
 using Grpc.Core.Interceptors;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Cluster.Services;
 
+/// <summary>集群 gRPC 服务端的令牌认证拦截器，按请求头做恒定时间比对。</summary>
 public sealed class ClusterAuthenticationInterceptor(IOptions<Models.Options.RpcOptions> options) : Interceptor
 {
     private const string TokenHeader = "x-kvmcontrol-token";
@@ -39,9 +42,20 @@ public sealed class ClusterAuthenticationInterceptor(IOptions<Models.Options.Rpc
         }
 
         string? suppliedToken = context.RequestHeaders.GetValue(TokenHeader);
-        if (!string.Equals(token, suppliedToken, StringComparison.Ordinal))
+        if (!FixedTimeEquals(token, suppliedToken))
         {
             throw new RpcException(new Status(StatusCode.Unauthenticated, "Cluster RPC authentication failed."));
         }
+    }
+
+    private static bool FixedTimeEquals(string expected, string? actual)
+    {
+        if (actual is null)
+        {
+            return false;
+        }
+        byte[] expectedBytes = SHA256.HashData(Encoding.UTF8.GetBytes(expected));
+        byte[] actualBytes = SHA256.HashData(Encoding.UTF8.GetBytes(actual));
+        return CryptographicOperations.FixedTimeEquals(expectedBytes, actualBytes);
     }
 }

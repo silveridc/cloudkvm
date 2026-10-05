@@ -1,11 +1,11 @@
+using Control.Areas.Admin;
+using Control.Interface;
+using Control.Services;
+using Microsoft.OpenApi;
+using StackExchange.Redis;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Control.Areas.Admin;
-using Control.Model.Response;
-using Control.Services;
-using Microsoft.Extensions.Caching.StackExchangeRedis;
-using StackExchange.Redis;
 
 namespace Control;
 
@@ -13,8 +13,11 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
+        const string applicationVersion = "kvm-control@v1.0.0-rc1";
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
         IServiceCollection services = builder.Services;
+
+        services.AddCors();
 
         services
             .AddOptions<ClustersOptions>()
@@ -25,42 +28,74 @@ public static class Program
         services
             .AddOptions<CacheOptions>()
             .BindConfiguration(CacheOptions.SectionName);
-
-        string? redisConnection = builder.Configuration.GetConnectionString("Redis");
-        if (!string.IsNullOrWhiteSpace(redisConnection))
+        services
+            .AddOptions<OperationOptions>()
+            .BindConfiguration(OperationOptions.SectionName);
+        services
+            .AddOptions<ClusterMetricsOptions>()
+            .BindConfiguration(ClusterMetricsOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        builder.WebHost.UseSentry(options =>
         {
-            ConfigurationOptions redisOptions = ConfigurationOptions.Parse(redisConnection);
-            redisOptions.AbortOnConnectFail = false;
-            services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisOptions));
+            options.Release = applicationVersion;
+            options.Dsn = "https://99d741d8dda945e9ed3f0a4d226576ad@sentry.silveridc.cn/19";
+            options.TracesSampleRate = 1D;
+            options.SendDefaultPii = true;
+            //options.Debug = true;
+            options.AutoSessionTracking = true;
+        });
+
+        string? redisConnectionString = builder.Configuration.GetConnectionString("Redis");
+        if (!string.IsNullOrWhiteSpace(redisConnectionString))
+        {
+            ConfigurationOptions redisConfiguration = ConfigurationOptions.Parse(redisConnectionString);
+            services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConfiguration));
             services.AddStackExchangeRedisCache(options =>
             {
-                options.ConfigurationOptions = redisOptions;
+                options.ConfigurationOptions = redisConfiguration;
+                options.InstanceName = applicationVersion;
             });
         }
         else
         {
             if (!builder.Environment.IsDevelopment())
             {
-                throw new InvalidOperationException("A Redis connection is required outside Development.");
+                throw new InvalidOperationException("ConnectionStrings:Redis is required outside the Development environment.");
             }
             services.AddDistributedMemoryCache();
         }
-
+        // Singleton
         services
             .AddSingleton<ControlInstance>()
             .AddSingleton<IClusterClientFactory, ClusterClientFactory>()
             .AddSingleton<VncConsoleTicketStore>()
             .AddSingleton<VncConsoleProxy>()
             .AddSingleton<OperationCache>()
-            .AddSingleton<OperationQueue>();
+            .AddSingleton<OperationQueue>()
+            .AddSingleton<MetricsStore>();
+
         services
             .AddHostedService<VncConsoleTicketCleanupService>()
             .AddHostedService<ControlInstanceHeartbeatService>()
+            .AddHostedService<MetricsPollingService>()
             .AddHostedService<OperationWorker>();
-        services.AddControllers(options =>
+
+        // Register Swagger services
+        services.AddEndpointsApiExplorer();
+        services.AddSwaggerGen(options =>
+        {
+            options.SwaggerDoc("v1", new OpenApiInfo
             {
-                options.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true;
-            })
+                Title = "Api v1",
+                Version = "v1"
+            });
+        });
+
+        services.AddControllers(options =>
+        {
+            options.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true;
+        })
             .ConfigureApiBehaviorOptions(options =>
             {
                 options.InvalidModelStateResponseFactory = context =>
@@ -82,22 +117,30 @@ public static class Program
                 jsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
                 jsonOptions.PropertyNameCaseInsensitive = true;
             });
-        services.AddOpenApi();
 
         WebApplication app = builder.Build();
+
         string[] supportedCultures = ["zh-CN", "en-US"];
         app.UseRequestLocalization(new RequestLocalizationOptions()
             .SetDefaultCulture("zh-CN")
             .AddSupportedCultures(supportedCultures)
             .AddSupportedUICultures(supportedCultures));
-        app.UseMiddleware<ApiResponseMiddleware>();
-        app.MapOpenApi("/doc/get");
+        app.UseSwagger();
+        app.UseSwaggerUI(options =>
+        {
+            options.SwaggerEndpoint("/swagger/v1/swagger.json", "Api v1");
+        });
+        app.UseCors();
         app.UseHttpsRedirection();
         app.UseWebSockets();
         app.UseStaticFiles();
+
+        // Custom business middleware runs after Swagger
+        app.UseMiddleware<ApiResponseMiddleware>();
         app.UseMiddleware<ManagementApiAuthenticationMiddleware>();
+
         app.MapControllers();
-        app.Map("/api/v1/consoles/{ticket}", async (HttpContext context, string ticket, VncConsoleProxy proxy) => await proxy.ProxyAsync(context, ticket));
+        app.Map("/api/v1/consoles", async (HttpContext context, VncConsoleProxy proxy) => await proxy.ProxyAsync(context));
 
         await app.RunAsync();
     }

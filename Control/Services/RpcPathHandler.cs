@@ -2,6 +2,7 @@ using System.Net.Http;
 
 namespace Control.Services;
 
+/// <summary>为出站 gRPC 请求补上 /rpc 路径前缀的 HTTP 处理器。</summary>
 public sealed class RpcPathHandler(HttpMessageHandler innerHandler) : DelegatingHandler(innerHandler)
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

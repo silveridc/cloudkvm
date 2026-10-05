@@ -1,5 +1,6 @@
 namespace Control.Services;
 
+/// <summary>周期清理过期 VNC 票据的后台服务。</summary>
 public sealed class VncConsoleTicketCleanupService(VncConsoleTicketStore ticketStore) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

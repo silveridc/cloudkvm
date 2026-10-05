@@ -4,46 +4,60 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
+using Cluster.Interface;
 
 namespace Cluster.Services;
 
-public sealed class VirtualMachineProvisioner(IOptions<Models.Options.ProvisioningOptions> options, IVirshClient virshClient) : IVirtualMachineProvisioner
+/// <summary>虚拟机生命周期管理：创建（qcow2/cloud-init/domain XML）与删除，全部操作仅作用于带受管标记的 VM。</summary>
+public sealed class VirtualMachineProvisioner(
+    IOptions<Models.Options.ProvisioningOptions> options,
+    IVirshClient virshClient,
+    IVirtualMachineLockManager virtualMachineLockManager,
+    ILogger<VirtualMachineProvisioner> logger) : IVirtualMachineProvisioner
 {
-    private static readonly Regex NamePattern = new("^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex MacAddressPattern = new("^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex UserNamePattern = new("^[a-z_][a-z0-9_-]{0,31}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex SshKeyPattern = new("^(ssh-(ed25519|rsa)|ecdsa-sha2-[A-Za-z0-9-]+) [A-Za-z0-9+/=]+(?: [^\\r\\n]*)?$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex SearchDomainPattern = new("^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> VirtualMachineLocks = new(StringComparer.Ordinal);
+    private static readonly Regex _namePattern = new("^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex _macAddressPattern = new("^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex _userNamePattern = new("^[a-z_][a-z0-9_-]{0,31}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex _sshKeyPattern = new("^(ssh-(ed25519|rsa)|ecdsa-sha2-[A-Za-z0-9-]+) [A-Za-z0-9+/=]+(?: [^\\r\\n]*)?$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex _searchDomainPattern = new("^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly SemaphoreSlim _provisionLock = new(1, 1);
     private const int CommandTimeoutSeconds = 120;
     private const string ManagedMarkerFileName = ".managed-by-kvmcontrol";
 
     public async Task<VirshVirtualMachine> CreateAsync(VirtualMachineProvisionRequest request, CancellationToken cancellationToken)
     {
         ValidateRequest(request);
-        SemaphoreSlim virtualMachineLock = VirtualMachineLocks.GetOrAdd(request.Name, _ => new SemaphoreSlim(1, 1));
-        await virtualMachineLock.WaitAsync(cancellationToken);
-        try
+        return await virtualMachineLockManager.RunAsync(request.Name, async _ =>
         {
-            return await CreateLockedAsync(request, cancellationToken);
-        }
-        finally
-        {
-            virtualMachineLock.Release();
-        }
+            await _provisionLock.WaitAsync(cancellationToken);
+            try
+            {
+                return await CreateLockedAsync(request, cancellationToken);
+            }
+            finally
+            {
+                _provisionLock.Release();
+            }
+        }, cancellationToken);
     }
 
     private async Task<VirshVirtualMachine> CreateLockedAsync(VirtualMachineProvisionRequest request, CancellationToken cancellationToken)
     {
         Models.Options.ProvisioningOptions configuration = options.Value;
+        ValidateConfiguredLimits(request, configuration);
         string baseImage = ResolveBaseImage(configuration.BaseImageDirectory, request.BaseImage);
         string virtualMachineDirectory = Path.Combine(Path.GetFullPath(configuration.VirtualMachineDirectory), request.Name);
         string varsPath = Path.Combine(virtualMachineDirectory, "OVMF_VARS.fd");
         string diskPath = Path.Combine(virtualMachineDirectory, "disk.qcow2");
         string cloudInitPath = Path.Combine(virtualMachineDirectory, "cloud-init.iso");
         string domainXmlPath = Path.Combine(virtualMachineDirectory, "domain.xml");
+        string domainUuid = Guid.NewGuid().ToString();
 
-        if (await virshClient.GetVirtualMachineAsync(request.Name, cancellationToken) is not null)
+        if (await virshClient.ListVirtualMachinesAsync(cancellationToken) is { Count: var count } && count >= Math.Clamp(configuration.MaximumVirtualMachines, 1, 4096))
+        {
+            throw new InvalidOperationException("The managed virtual machine limit has been reached.");
+        }
+        if (await virshClient.DomainExistsAsync(request.Name, cancellationToken))
         {
             throw new InvalidOperationException($"Virtual machine '{request.Name}' already exists.");
         }
@@ -57,14 +71,26 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         }
 
         Directory.CreateDirectory(virtualMachineDirectory);
+        bool ownsDirectory = true;
+        string markerPath = Path.Combine(virtualMachineDirectory, ManagedMarkerFileName);
         try
         {
-            File.WriteAllText(Path.Combine(virtualMachineDirectory, ManagedMarkerFileName), request.Name);
+            SetDirectoryPermissions(virtualMachineDirectory);
+            await using (FileStream marker = new(markerPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            await using (StreamWriter writer = new(marker, new UTF8Encoding(false)))
+            {
+                await writer.WriteAsync(domainUuid);
+            }
+            SetFilePermissions(markerPath);
             File.Copy(configuration.OvmfVarsTemplatePath, varsPath);
+            SetFilePermissions(varsPath);
             await RunAsync("qemu-img", ["create", "-f", "qcow2", "-b", baseImage, "-F", "qcow2", diskPath], cancellationToken);
+            SetFilePermissions(diskPath);
             await CreateCloudInitImageAsync(cloudInitPath, request, cancellationToken);
-            string domainXml = CreateDomainXml(request, configuration.OvmfCodePath, varsPath, diskPath, cloudInitPath);
+            SetFilePermissions(cloudInitPath);
+            string domainXml = CreateDomainXml(request, domainUuid, configuration.OvmfCodePath, varsPath, diskPath, cloudInitPath);
             await File.WriteAllTextAsync(domainXmlPath, domainXml, new UTF8Encoding(false), cancellationToken);
+            SetFilePermissions(domainXmlPath);
             await virshClient.DefineAsync(domainXmlPath, cancellationToken);
 
             if (request.Start)
@@ -75,51 +101,72 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
             return await virshClient.GetVirtualMachineAsync(request.Name, cancellationToken)
                 ?? throw new InvalidOperationException("Virtual machine was not found after definition.");
         }
-        catch
+        catch (Exception exception)
         {
+            using CancellationTokenSource cleanupTimeout = new(TimeSpan.FromSeconds(CommandTimeoutSeconds));
+            bool domainRemoved = false;
             try
             {
-                await virshClient.UndefineAsync(request.Name, CancellationToken.None);
+                domainRemoved = await virshClient.UndefineIfUuidMatchesAsync(request.Name, domainUuid, cleanupTimeout.Token);
             }
-            catch
+            catch (Exception cleanupException)
             {
+                logger.LogError(cleanupException, "Unable to remove failed virtual machine definition {VirtualMachineName} ({VirtualMachineUuid}).", request.Name, domainUuid);
             }
-            if (Directory.Exists(virtualMachineDirectory))
+
+            if (domainRemoved && ownsDirectory && Directory.Exists(virtualMachineDirectory)
+                && (!File.Exists(markerPath)
+                    || string.Equals(File.ReadAllText(markerPath).Trim(), domainUuid, StringComparison.OrdinalIgnoreCase)))
             {
-                Directory.Delete(virtualMachineDirectory, true);
+                try
+                {
+                    Directory.Delete(virtualMachineDirectory, true);
+                }
+                catch (Exception cleanupException)
+                {
+                    logger.LogError(cleanupException, "Unable to remove failed virtual machine storage {VirtualMachineDirectory}.", virtualMachineDirectory);
+                }
             }
-            throw;
+            else if (ownsDirectory && !domainRemoved)
+            {
+                logger.LogWarning("Preserving virtual machine storage {VirtualMachineDirectory} because the failed domain could not be confirmed as undefined.", virtualMachineDirectory);
+            }
+
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception).Throw();
+            throw new UnreachableException();
         }
     }
 
     public async Task DeleteAsync(string name, bool force, bool deleteStorage, CancellationToken cancellationToken)
     {
-        if (!NamePattern.IsMatch(name))
+        if (!_namePattern.IsMatch(name))
         {
             throw new ArgumentException("Virtual machine name is invalid.", nameof(name));
         }
 
-        SemaphoreSlim virtualMachineLock = VirtualMachineLocks.GetOrAdd(name, _ => new SemaphoreSlim(1, 1));
-        await virtualMachineLock.WaitAsync(cancellationToken);
-        try
-        {
-            await DeleteLockedAsync(name, force, deleteStorage, cancellationToken);
-        }
-        finally
-        {
-            virtualMachineLock.Release();
-        }
+        await virtualMachineLockManager.RunAsync(name, _ => DeleteLockedAsync(name, force, deleteStorage, cancellationToken), cancellationToken);
     }
 
     private async Task DeleteLockedAsync(string name, bool force, bool deleteStorage, CancellationToken cancellationToken)
     {
-        VirshVirtualMachine? virtualMachine = await virshClient.GetVirtualMachineAsync(name, cancellationToken);
+        bool domainExists = await virshClient.DomainExistsAsync(name, cancellationToken);
+        if (domainExists && !await virshClient.IsManagedAsync(name, cancellationToken))
+        {
+            throw new InvalidOperationException("Virtual machine is not managed by KvmControl.");
+        }
+        string? managedUuid = null;
+        if (domainExists)
+        {
+            VirshVirtualMachine domain = await virshClient.GetVirtualMachineAsync(name, cancellationToken)
+                ?? throw new InvalidOperationException("Virtual machine is not managed by KvmControl.");
+            managedUuid = domain.Uuid;
+        }
+        VirshVirtualMachine? virtualMachine = domainExists
+            ? await virshClient.GetVirtualMachineAsync(name, cancellationToken)
+            : null;
         if (virtualMachine is not null)
         {
-            if (!await virshClient.IsManagedAsync(name, cancellationToken))
-            {
-                throw new InvalidOperationException("Virtual machine is not managed by KvmControl.");
-            }
+            if (virtualMachine.State != VirshVirtualMachineState.Shutoff)
             {
                 if (!force)
                 {
@@ -135,10 +182,10 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
             return;
         }
 
-        DeleteManagedStorage(name);
+        DeleteManagedStorage(name, managedUuid);
     }
 
-    private void DeleteManagedStorage(string name)
+    private void DeleteManagedStorage(string name, string? managedUuid)
     {
         string root = Path.GetFullPath(options.Value.VirtualMachineDirectory);
         string virtualMachineDirectory = Path.GetFullPath(Path.Combine(root, name));
@@ -148,8 +195,19 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         }
         if (Directory.Exists(virtualMachineDirectory))
         {
+            DirectoryInfo directoryInfo = new(virtualMachineDirectory);
+            if (directoryInfo.LinkTarget is not null || (directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidOperationException("Symbolic-link virtual machine storage is not allowed.");
+            }
             string markerPath = Path.Combine(virtualMachineDirectory, ManagedMarkerFileName);
-            if (!File.Exists(markerPath) || !string.Equals(File.ReadAllText(markerPath), name, StringComparison.Ordinal))
+            if (!File.Exists(markerPath))
+            {
+                return;
+            }
+            string marker = File.ReadAllText(markerPath).Trim();
+            if (!Guid.TryParse(marker, out _)
+                || (managedUuid is not null && !string.Equals(marker, managedUuid, StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidOperationException("Virtual machine storage is not managed by KvmControl.");
             }
@@ -165,6 +223,10 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         {
             string userData = CreateUserData(request);
             string networkConfig = CreateNetworkConfig(request);
+            if (userData.Length + networkConfig.Length > 3 * 1024 * 1024)
+            {
+                throw new ArgumentException("Cloud-init data exceeds the maximum seed size.", nameof(request));
+            }
             string instanceId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{userData}\n{networkConfig}"))).ToLowerInvariant();
             await File.WriteAllTextAsync(Path.Combine(stagingDirectory, "user-data"), userData, new UTF8Encoding(false), cancellationToken);
             await File.WriteAllTextAsync(Path.Combine(stagingDirectory, "network-config"), networkConfig, new UTF8Encoding(false), cancellationToken);
@@ -191,7 +253,7 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         builder.AppendLine("    ssh_authorized_keys:");
         foreach (string key in request.CloudInit.SshAuthorizedKeys)
         {
-            builder.AppendLine($"      - {key}");
+            builder.AppendLine($"      - '{key.Replace("'", "''", StringComparison.Ordinal)}'");
         }
         builder.AppendLine("ssh_pwauth: false");
         builder.AppendLine("disable_root: true");
@@ -227,7 +289,7 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         return builder.ToString();
     }
 
-    private static string CreateDomainXml(VirtualMachineProvisionRequest request, string codePath, string varsPath, string diskPath, string cloudInitPath)
+    private static string CreateDomainXml(VirtualMachineProvisionRequest request, string domainUuid, string codePath, string varsPath, string diskPath, string cloudInitPath)
     {
         XmlWriterSettings settings = new() { Indent = true, OmitXmlDeclaration = true };
         StringBuilder output = new();
@@ -235,6 +297,13 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         writer.WriteStartElement("domain");
         writer.WriteAttributeString("type", "kvm");
         writer.WriteElementString("name", request.Name);
+        writer.WriteElementString("uuid", domainUuid);
+        writer.WriteStartElement("metadata");
+        writer.WriteStartElement("managed", "urn:kvmcontrol:managed");
+        writer.WriteAttributeString("version", "1");
+        writer.WriteString(domainUuid);
+        writer.WriteEndElement();
+        writer.WriteEndElement();
         writer.WriteElementString("memory", (request.MemoryMiB * 1024).ToString());
         writer.WriteElementString("currentMemory", (request.MemoryMiB * 1024).ToString());
         writer.WriteElementString("vcpu", request.VirtualCpuCount.ToString());
@@ -277,6 +346,7 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         writer.WriteAttributeString("type", "vnc");
         writer.WriteAttributeString("autoport", "yes");
         writer.WriteAttributeString("listen", "127.0.0.1");
+        writer.WriteAttributeString("passwd", Convert.ToBase64String(RandomNumberGenerator.GetBytes(6)));
         writer.WriteEndElement();
         writer.WriteEndElement();
         writer.WriteEndElement();
@@ -309,7 +379,7 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
 
     private static string ResolveBaseImage(string baseImageDirectory, string baseImage)
     {
-        if (!NamePattern.IsMatch(baseImage) || !baseImage.EndsWith(".qcow2", StringComparison.OrdinalIgnoreCase))
+        if (!_namePattern.IsMatch(baseImage) || !baseImage.EndsWith(".qcow2", StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("Base image must be an approved qcow2 filename.", nameof(baseImage));
         }
@@ -321,12 +391,64 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
             throw new ArgumentException("Base image was not found in the approved image directory.", nameof(baseImage));
         }
 
+        EnsureNoSymbolicLinks(root, path);
         return path;
+    }
+
+    private static void EnsureNoSymbolicLinks(string root, string path)
+    {
+        FileSystemInfo current = new DirectoryInfo(root);
+        if (current.LinkTarget is not null || (current.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new ArgumentException("Symbolic links are not allowed in the base image path.", nameof(path));
+        }
+
+        string relative = Path.GetRelativePath(root, path);
+        foreach (string component in relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = current is DirectoryInfo directory
+                ? (FileSystemInfo)new FileInfo(Path.Combine(directory.FullName, component))
+                : throw new ArgumentException("Base image path is invalid.", nameof(path));
+            if (current.LinkTarget is not null || (current.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new ArgumentException("Symbolic links are not allowed in the base image path.", nameof(path));
+            }
+        }
+    }
+
+    private static void ValidateConfiguredLimits(VirtualMachineProvisionRequest request, Models.Options.ProvisioningOptions configuration)
+    {
+        ulong maximumMemoryMiB = Math.Clamp(configuration.MaximumMemoryMiB, 512, 1_048_576);
+        uint maximumVirtualCpuCount = Math.Clamp(configuration.MaximumVirtualCpuCount, 1, 256);
+        if (request.MemoryMiB > maximumMemoryMiB || request.VirtualCpuCount > maximumVirtualCpuCount)
+        {
+            throw new ArgumentException("Requested virtual machine resources exceed the configured node limits.", nameof(request));
+        }
+        if (configuration.AllowedBridges.Length == 0 || !configuration.AllowedBridges.Contains(request.BridgeName, StringComparer.Ordinal))
+        {
+            throw new ArgumentException("The requested bridge is not approved for virtual machines.", nameof(request));
+        }
+    }
+
+    private static void SetDirectoryPermissions(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static void SetFilePermissions(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     private static void ValidateRequest(VirtualMachineProvisionRequest request)
     {
-        if (!NamePattern.IsMatch(request.Name))
+        if (!_namePattern.IsMatch(request.Name))
         {
             throw new ArgumentException("Virtual machine name is invalid.", nameof(request));
         }
@@ -334,11 +456,11 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         {
             throw new ArgumentException("Memory must be 512-1048576 MiB and virtual CPU count must be 1-256.", nameof(request));
         }
-        if (!NamePattern.IsMatch(request.BridgeName) || !MacAddressPattern.IsMatch(request.MacAddress))
+        if (!_namePattern.IsMatch(request.BridgeName) || !_macAddressPattern.IsMatch(request.MacAddress))
         {
             throw new ArgumentException("Bridge name or MAC address is invalid.", nameof(request));
         }
-        if (!UserNamePattern.IsMatch(request.CloudInit.UserName) || request.CloudInit.SshAuthorizedKeys.Count is 0 or > 32 || request.CloudInit.SshAuthorizedKeys.Any(key => key.Length > 8192 || !SshKeyPattern.IsMatch(key)))
+        if (request.CloudInit.DnsServers.Count > 8 || !_userNamePattern.IsMatch(request.CloudInit.UserName) || request.CloudInit.SshAuthorizedKeys.Count is 0 or > 32 || request.CloudInit.SshAuthorizedKeys.Any(key => key.Length > 8192 || !_sshKeyPattern.IsMatch(key)))
         {
             throw new ArgumentException("Cloud-init user or SSH public keys are invalid.", nameof(request));
         }
@@ -354,7 +476,7 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         {
             throw new ArgumentException("Cloud-init DNS servers must be IPv4 addresses.", nameof(request));
         }
-        if (!string.IsNullOrEmpty(request.CloudInit.SearchDomain) && !SearchDomainPattern.IsMatch(request.CloudInit.SearchDomain))
+        if (!string.IsNullOrEmpty(request.CloudInit.SearchDomain) && !_searchDomainPattern.IsMatch(request.CloudInit.SearchDomain))
         {
             throw new ArgumentException("Cloud-init search domain is invalid.", nameof(request));
         }
@@ -377,11 +499,25 @@ public sealed class VirtualMachineProvisioner(IOptions<Models.Options.Provisioni
         using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Unable to start {fileName}.");
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(CommandTimeoutSeconds));
         using CancellationTokenSource linkedTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        Task<string> output = process.StandardOutput.ReadToEndAsync(linkedTokenSource.Token);
         Task<string> error = process.StandardError.ReadToEndAsync(linkedTokenSource.Token);
-        await process.WaitForExitAsync(linkedTokenSource.Token);
+        try
+        {
+            await process.WaitForExitAsync(linkedTokenSource.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(true);
+                process.WaitForExit();
+            }
+            throw;
+        }
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException($"{fileName} exited with code {process.ExitCode}: {(await error).Trim()}");
         }
+        await output;
     }
 }

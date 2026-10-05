@@ -4,13 +4,18 @@ using Grpc.Core;
 
 namespace Control.Services;
 
-public sealed class OperationWorker(OperationQueue operationQueue, ILogger<OperationWorker> logger) : BackgroundService
+/// <summary>后台操作执行器：消费队列工作项，带执行超时并把终态持久化。</summary>
+public sealed class OperationWorker(
+    OperationQueue operationQueue,
+    IOptions<Model.Options.OperationOptions> options,
+    ILogger<OperationWorker> logger) : BackgroundService
 {
-    private const int WorkerCount = 4;
+    private readonly int _workerCount = Math.Clamp(options.Value.WorkerCount, 1, 64);
+    private readonly TimeSpan _executionTimeout = TimeSpan.FromMinutes(Math.Clamp(options.Value.ExecutionTimeoutMinutes, 1, 1440));
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        return Task.WhenAll(Enumerable.Range(0, WorkerCount).Select(_ => RunWorkerAsync(stoppingToken)));
+        return Task.WhenAll(Enumerable.Range(0, _workerCount).Select(_ => RunWorkerAsync(stoppingToken)));
     }
 
     private async Task RunWorkerAsync(CancellationToken stoppingToken)
@@ -32,19 +37,30 @@ public sealed class OperationWorker(OperationQueue operationQueue, ILogger<Opera
     {
         ControlOperation operation = item.Operation;
         operation.Status = OperationStatus.Running;
-        await SaveSafelyAsync(operation);
+        if (!await SaveSafelyAsync(operation))
+        {
+            operation.Status = OperationStatus.Failed;
+            operation.GrpcStatusCode = StatusCode.Unavailable.ToString();
+            operation.Error = "Operation state storage is unavailable.";
+            operation.CompletedAt = DateTimeOffset.UtcNow;
+            operation.Completion.TrySetResult();
+            await SaveSafelyAsync(operation);
+            operationQueue.ReleaseQueueSlot();
+            return;
+        }
         try
         {
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-            timeout.CancelAfter(TimeSpan.FromMinutes(30));
+            timeout.CancelAfter(_executionTimeout);
             operation.Result = await item.Work(timeout.Token);
             operation.Status = OperationStatus.Succeeded;
         }
         catch (RpcException exception)
         {
+            logger.LogWarning(exception, "Cluster RPC failed while executing operation {OperationId}.", operation.Id);
             operation.Status = OperationStatus.Failed;
             operation.GrpcStatusCode = exception.StatusCode.ToString();
-            operation.Error = SanitizeRpcError(exception.StatusCode);
+            operation.Error = "The cluster operation could not be completed.";
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -56,45 +72,35 @@ public sealed class OperationWorker(OperationQueue operationQueue, ILogger<Opera
         {
             operation.Status = OperationStatus.Failed;
             operation.GrpcStatusCode = StatusCode.DeadlineExceeded.ToString();
-            operation.Error = "Operation exceeded the 30 minute execution limit.";
+            operation.Error = $"Operation exceeded the {_executionTimeout.TotalMinutes:0} minute execution limit.";
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "Operation {OperationId} failed.", operation.Id);
             operation.Status = OperationStatus.Failed;
             operation.GrpcStatusCode = StatusCode.Internal.ToString();
-            operation.Error = "The operation failed on the cluster node.";
+            operation.Error = "The operation failed.";
         }
         finally
         {
             operation.CompletedAt = DateTimeOffset.UtcNow;
             operation.Completion.TrySetResult();
             await SaveSafelyAsync(operation);
+            operationQueue.ReleaseQueueSlot();
         }
     }
 
-    private async Task SaveSafelyAsync(ControlOperation operation)
+    private async Task<bool> SaveSafelyAsync(ControlOperation operation)
     {
         try
         {
             await operationQueue.SaveAsync(operation, CancellationToken.None);
+            return true;
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "Unable to persist operation {OperationId}.", operation.Id);
+            return false;
         }
-    }
-
-    private static string SanitizeRpcError(StatusCode statusCode)
-    {
-        return statusCode switch
-        {
-            StatusCode.InvalidArgument => "The cluster rejected the request parameters.",
-            StatusCode.NotFound => "The requested cluster resource was not found.",
-            StatusCode.FailedPrecondition => "The cluster resource is not in the required state.",
-            StatusCode.Unauthenticated => "Cluster authentication failed.",
-            StatusCode.Unavailable => "The cluster node is unavailable.",
-            _ => "The operation failed on the cluster node."
-        };
     }
 }

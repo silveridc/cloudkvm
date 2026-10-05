@@ -4,12 +4,14 @@ using Grpc.Core;
 using Kvm.Contracts;
 using HttpCreateBridgeRequest = Control.Areas.Admin.Models.Requests.CreateBridgeRequest;
 using HttpCreateNatRuleRequest = Control.Areas.Admin.Models.Requests.CreateNatRuleRequest;
+using Control.Interface;
 
 namespace Control.Areas.Admin.Controllers;
 
 [Area("Admin")]
 [ApiController]
 [Route("/admin/v1/clusters/{node}/networks")]
+/// <summary>宿主机网络管理端点：网桥与 NAT 规则的查询、创建与删除。</summary>
 public sealed class NetworksController(IClusterClientFactory clusterClientFactory, OperationQueue operationQueue) : AdminControllerBase
 {
     [HttpGet("bridges")]

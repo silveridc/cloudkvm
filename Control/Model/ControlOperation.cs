@@ -1,5 +1,6 @@
 namespace Control.Model;
 
+/// <summary>一次受控异步操作的内存态：标识、幂等键、状态与完成信号。</summary>
 public sealed class ControlOperation(string id, string idempotencyKey, string fingerprint, string type, string node, string ownerId, DateTimeOffset? createdAt = null)
 {
     public string Id { get; } = id;

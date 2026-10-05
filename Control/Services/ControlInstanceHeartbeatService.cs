@@ -1,5 +1,6 @@
 namespace Control.Services;
 
+/// <summary>每 10 秒续期本实例存活标记的后台服务。</summary>
 public sealed class ControlInstanceHeartbeatService(OperationCache operationCache, ILogger<ControlInstanceHeartbeatService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

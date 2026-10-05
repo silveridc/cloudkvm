@@ -2,10 +2,13 @@ using Cluster.Services;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Kvm.Contracts;
+using System.Text.RegularExpressions;
+using Cluster.Interface;
 
 namespace Cluster;
 
-public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkClient hostNetworkClient, IVirtualMachineProvisioner virtualMachineProvisioner, IVncConsoleService vncConsoleService, ILogger<ClusterAgentService> logger) : Kvm.Contracts.ClusterAgent.ClusterAgentBase
+/// <summary>集群代理的 gRPC 服务实现，把宿主机与虚拟机操作暴露给 Control 节点。</summary>
+public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkClient hostNetworkClient, IVirtualMachineProvisioner virtualMachineProvisioner, IVirtualMachineConfigurationManager virtualMachineConfigurationManager, IVncConsoleService vncConsoleService, INodeMetricsCollector nodeMetricsCollector, ILogger<ClusterAgentService> logger) : Kvm.Contracts.ClusterAgent.ClusterAgentBase
 {
     public override async Task<HostStatusReply> GetHostStatus(HostStatusRequest request, ServerCallContext context)
     {
@@ -23,7 +26,7 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         catch (Exception exception)
         {
             logger.LogWarning(exception, "Unable to query local libvirt host status.");
-            throw new RpcException(new Status(StatusCode.Unavailable, exception.Message));
+            throw new RpcException(new Status(StatusCode.Unavailable, "The libvirt service is unavailable."));
         }
     }
 
@@ -86,7 +89,8 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         }
         catch (ArgumentException exception)
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, exception.Message));
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
         }
     }
 
@@ -106,7 +110,8 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         }
         catch (ArgumentException exception)
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, exception.Message));
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
         }
     }
 
@@ -133,7 +138,8 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         }
         catch (ArgumentException exception)
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, exception.Message));
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
         }
     }
 
@@ -146,7 +152,8 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         }
         catch (ArgumentException exception)
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, exception.Message));
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
         }
     }
 
@@ -175,11 +182,13 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         }
         catch (ArgumentException exception)
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, exception.Message));
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
         }
         catch (InvalidOperationException exception)
         {
-            throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
+            logger.LogWarning(exception, "Cluster operation precondition failed.");
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, "The cluster resource is not in the required state."));
         }
     }
 
@@ -192,11 +201,117 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         }
         catch (ArgumentException exception)
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, exception.Message));
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
         }
         catch (InvalidOperationException exception)
         {
-            throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
+            logger.LogWarning(exception, "Cluster operation precondition failed.");
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, "The cluster resource is not in the required state."));
+        }
+    }
+
+    public override async Task<VirtualMachineConfigReply> GetVirtualMachineConfig(VirtualMachineRequest request, ServerCallContext context)
+    {
+        ValidateName(request.Name);
+        try
+        {
+            VirshVirtualMachineConfig config = await virtualMachineConfigurationManager.GetConfigAsync(request.Name, context.CancellationToken);
+            return new VirtualMachineConfigReply
+            {
+                Config = new VirtualMachineConfig
+                {
+                    Name = config.Name,
+                    State = ToContractState(config.State),
+                    Running = config.Running,
+                    PersistentVirtualCpuCount = config.PersistentVirtualCpuCount,
+                    PersistentMemoryMib = config.PersistentMemoryMiB,
+                    LiveVirtualCpuCount = config.LiveVirtualCpuCount,
+                    LiveMemoryMib = config.LiveMemoryMiB,
+                    SystemDisk = ToContract(config.SystemDisk)
+                }
+            };
+        }
+        catch (VirtualMachineNotFoundException)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, "Virtual machine was not found."));
+        }
+        catch (ArgumentException exception)
+        {
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
+        }
+        catch (InvalidOperationException exception)
+        {
+            logger.LogWarning(exception, "Cluster operation precondition failed.");
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, "The cluster resource is not in the required state."));
+        }
+    }
+
+    public override async Task<UpdateVirtualMachineConfigReply> UpdateVirtualMachineConfig(UpdateVirtualMachineConfigRequest request, ServerCallContext context)
+    {
+        ValidateName(request.Name);
+        uint? virtualCpuCount = request.HasVirtualCpuCount ? request.VirtualCpuCount : null;
+        ulong? memoryMiB = request.HasMemoryMib ? request.MemoryMib : null;
+        try
+        {
+            VirshVirtualMachineConfigUpdate update = await virtualMachineConfigurationManager.UpdateConfigAsync(
+                request.Name,
+                virtualCpuCount,
+                memoryMiB,
+                request.ApplyLive,
+                context.CancellationToken);
+            return new UpdateVirtualMachineConfigReply
+            {
+                PersistentApplied = update.PersistentApplied,
+                LiveApplied = update.LiveApplied,
+                LiveMessage = update.LiveMessage,
+                PersistentVirtualCpuCount = update.PersistentVirtualCpuCount,
+                PersistentMemoryMib = update.PersistentMemoryMiB,
+                LiveVirtualCpuCount = update.LiveVirtualCpuCount,
+                LiveMemoryMib = update.LiveMemoryMiB
+            };
+        }
+        catch (VirtualMachineNotFoundException)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, "Virtual machine was not found."));
+        }
+        catch (ArgumentException exception)
+        {
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
+        }
+        catch (InvalidOperationException exception)
+        {
+            logger.LogWarning(exception, "Cluster operation precondition failed.");
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, "The cluster resource is not in the required state."));
+        }
+    }
+
+    public override async Task<ResizeVirtualMachineDiskReply> ResizeVirtualMachineDisk(ResizeVirtualMachineDiskRequest request, ServerCallContext context)
+    {
+        ValidateName(request.Name);
+        try
+        {
+            VirshVirtualMachineSystemDisk systemDisk = await virtualMachineConfigurationManager.ResizeSystemDiskAsync(
+                request.Name,
+                request.SizeGib,
+                context.CancellationToken);
+            return new ResizeVirtualMachineDiskReply { SystemDisk = ToContract(systemDisk) };
+        }
+        catch (VirtualMachineNotFoundException)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, "Virtual machine was not found."));
+        }
+        catch (ArgumentException exception)
+        {
+            logger.LogWarning(exception, "Invalid cluster request parameters.");
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Request parameters are invalid."));
+        }
+        catch (InvalidOperationException exception)
+        {
+            logger.LogWarning(exception, "Cluster operation precondition failed.");
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, "The cluster resource is not in the required state."));
         }
     }
 
@@ -205,18 +320,37 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         ValidateName(request.Name);
         try
         {
-            string sessionId = await vncConsoleService.OpenAsync(request.Name, context.CancellationToken);
-            return new OpenVncConsoleReply { SessionId = sessionId };
+            VncConsoleOpenResult result = await vncConsoleService.OpenAsync(request.Name, context.CancellationToken);
+            return new OpenVncConsoleReply { SessionId = result.SessionId, Password = result.Password };
         }
         catch (InvalidOperationException exception)
         {
-            throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
+            logger.LogWarning(exception, "Cluster operation precondition failed.");
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, "The cluster resource is not in the required state."));
         }
     }
 
     public override Task ProxyVnc(IAsyncStreamReader<VncProxyFrame> requestStream, IServerStreamWriter<VncProxyFrame> responseStream, ServerCallContext context)
     {
         return vncConsoleService.ProxyAsync(requestStream, responseStream, context.CancellationToken);
+    }
+
+    public override async Task<NodeMetricsReply> GetNodeMetrics(NodeMetricsRequest request, ServerCallContext context)
+    {
+        try
+        {
+            // 采集器对测不到的字段留空，只有取消或意外失败才变成 RPC 错误。
+            return await nodeMetricsCollector.GetNodeMetricsAsync(context.CancellationToken);
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Unable to collect node metrics.");
+            throw new RpcException(new Status(StatusCode.Unavailable, "Node metrics are unavailable."));
+        }
     }
 
     private static Network ToContract(HostBridge source)
@@ -251,6 +385,30 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
         return (ushort)port;
     }
 
+    private static VirtualMachineSystemDisk ToContract(VirshVirtualMachineSystemDisk source)
+    {
+        return new VirtualMachineSystemDisk
+        {
+            File = source.File,
+            SizeGib = source.SizeGiB
+        };
+    }
+
+    private static VirtualMachineState ToContractState(VirshVirtualMachineState state)
+    {
+        return state switch
+        {
+            VirshVirtualMachineState.Running => VirtualMachineState.Running,
+            VirshVirtualMachineState.Blocked => VirtualMachineState.Blocked,
+            VirshVirtualMachineState.Paused => VirtualMachineState.Paused,
+            VirshVirtualMachineState.Shutdown => VirtualMachineState.Shutdown,
+            VirshVirtualMachineState.Shutoff => VirtualMachineState.Shutoff,
+            VirshVirtualMachineState.Crashed => VirtualMachineState.Crashed,
+            VirshVirtualMachineState.PowerManagementSuspended => VirtualMachineState.Pmsuspended,
+            _ => VirtualMachineState.Unspecified
+        };
+    }
+
     private static VirtualMachine ToContract(VirshVirtualMachine source)
     {
         return new VirtualMachine
@@ -258,28 +416,20 @@ public sealed class ClusterAgentService(IVirshClient virshClient, IHostNetworkCl
             Name = source.Name,
             Uuid = source.Uuid,
             Id = source.Id,
-            State = source.State switch
-            {
-                VirshVirtualMachineState.Running => VirtualMachineState.Running,
-                VirshVirtualMachineState.Blocked => VirtualMachineState.Blocked,
-                VirshVirtualMachineState.Paused => VirtualMachineState.Paused,
-                VirshVirtualMachineState.Shutdown => VirtualMachineState.Shutdown,
-                VirshVirtualMachineState.Shutoff => VirtualMachineState.Shutoff,
-                VirshVirtualMachineState.Crashed => VirtualMachineState.Crashed,
-                VirshVirtualMachineState.PowerManagementSuspended => VirtualMachineState.Pmsuspended,
-                _ => VirtualMachineState.Unspecified
-            },
+            State = ToContractState(source.State),
             MemoryMib = source.MemoryMiB,
             VirtualCpuCount = source.VirtualCpuCount,
             Persistent = source.Persistent
         };
     }
 
+    private static readonly Regex _virtualMachineNamePattern = new("^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static void ValidateName(string name)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Length > 255)
+        if (!_virtualMachineNamePattern.IsMatch(name))
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, "A virtual machine name is required and must be at most 255 characters."));
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Virtual machine name is invalid."));
         }
     }
 }

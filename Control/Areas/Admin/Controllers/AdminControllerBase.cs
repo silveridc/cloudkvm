@@ -6,9 +6,11 @@ using System.Text;
 using System.Text.Json;
 using Grpc.Core;
 using ApiResponse = Control.Model.Response.Response;
+using Control.Interface;
 
 namespace Control.Areas.Admin.Controllers;
 
+/// <summary>管理 API 控制器基类：集群客户端获取、幂等入队与统一响应构建。</summary>
 public abstract class AdminControllerBase : ControllerBase
 {
     protected bool TryGetClusterClient(IClusterClientFactory clusterClientFactory, string node, out Kvm.Contracts.ClusterAgent.ClusterAgentClient client, out JsonResult? error)
@@ -21,7 +23,7 @@ public abstract class AdminControllerBase : ControllerBase
         }
 
         client = null!;
-        error = NotFoundResponse();
+        error = ApiResponse.Fail(Resources.Localization.API.resource_not_found, ResponseCode.NotFound, StatusCodes.Status404NotFound);
         return false;
     }
 
@@ -92,6 +94,6 @@ public abstract class AdminControllerBase : ControllerBase
 
     protected static JsonResult ClusterError(RpcException exception)
     {
-        return ApiResponse.Fail(Resources.Localization.API.cluster_request_failed, new GrpcErrorResponse(exception.StatusCode.ToString(), exception.Status.Detail), ResponseCode.InternalError, StatusCodes.Status502BadGateway);
+        return ApiResponse.Fail(Resources.Localization.API.cluster_request_failed, new GrpcErrorResponse(exception.StatusCode.ToString(), Resources.Localization.API.cluster_request_failed), ResponseCode.InternalError, StatusCodes.Status502BadGateway);
     }
 }

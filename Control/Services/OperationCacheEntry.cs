@@ -5,6 +5,7 @@ using Control.Model.Response;
 
 namespace Control.Services;
 
+/// <summary>操作的可序列化缓存快照，Result 以 JSON 元素保存。</summary>
 public sealed record OperationCacheEntry(
     string Id,
     string IdempotencyKey,
@@ -19,7 +20,7 @@ public sealed record OperationCacheEntry(
     DateTimeOffset CreatedAt,
     DateTimeOffset? CompletedAt)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
@@ -34,7 +35,7 @@ public sealed record OperationCacheEntry(
             operation.Node,
             operation.OwnerId,
             operation.Status,
-            operation.Result is null ? null : JsonSerializer.SerializeToElement(operation.Result, JsonOptions),
+            operation.Result is null ? null : JsonSerializer.SerializeToElement(operation.Result, _jsonOptions),
             operation.GrpcStatusCode,
             operation.Error,
             operation.CreatedAt,

@@ -18,8 +18,45 @@ service ClusterAgent {
   rpc DeleteNatRule(DeleteNatRuleRequest) returns (google.protobuf.Empty);
   rpc CreateVirtualMachine(CreateVirtualMachineRequest) returns (VirtualMachineReply);
   rpc DeleteVirtualMachine(DeleteVirtualMachineRequest) returns (google.protobuf.Empty);
+  rpc GetVirtualMachineConfig(VirtualMachineRequest) returns (VirtualMachineConfigReply);
+  rpc UpdateVirtualMachineConfig(UpdateVirtualMachineConfigRequest) returns (UpdateVirtualMachineConfigReply);
+  rpc ResizeVirtualMachineDisk(ResizeVirtualMachineDiskRequest) returns (ResizeVirtualMachineDiskReply);
   rpc OpenVncConsole(OpenVncConsoleRequest) returns (OpenVncConsoleReply);
+  rpc GetNodeMetrics(NodeMetricsRequest) returns (NodeMetricsReply);
   rpc ProxyVnc(stream VncProxyFrame) returns (stream VncProxyFrame);
+}
+
+message NodeMetricsRequest {}
+
+message NodeMetricsReply {
+  HostMetrics host = 1;
+  repeated VirtualMachineMetrics virtual_machines = 2;
+}
+
+// /proc/stat 读取必须做两点差值求导!
+// 如果某个字段没给值（即 HasXxx == false），说明这时候根本测不准，千万别直接随便一个默认值丢上去。另外，CPU 使用率必须对比两次采样才能算出来差值，所以第一次调用时肯定是没有这个数值的。
+// Reading /proc/stat requires computing the delta between two sampling points.
+// If a field is not set (i.e., HasXxx == false), it indicates the metric cannot be reliably measured
+// at that moment; do not populate it with an arbitrary default value.
+// Additionally, CPU usage calculation requires two samples to compute the difference,
+// so this value will not be present on the initial invocation.
+message HostMetrics {
+  optional double cpu_usage_ratio = 1;
+  optional uint32 logical_cpu_count = 2;
+  optional uint64 memory_total_bytes = 3;
+  optional uint64 memory_available_bytes = 4;
+  string virtual_machine_directory = 5;
+  optional uint64 disk_total_bytes = 6;
+  optional uint64 disk_available_bytes = 7;
+  optional uint64 uptime_seconds = 8;
+}
+
+message VirtualMachineMetrics {
+  string name = 1;
+  optional double cpu_usage_ratio = 2;
+  optional uint64 memory_used_bytes = 3;
+  optional uint32 allocated_virtual_cpu_count = 4;
+  optional uint64 allocated_memory_bytes = 5;
 }
 
 message HostStatusRequest {}
@@ -174,14 +211,65 @@ message CloudInitConfig {
   string search_domain = 6;
 }
 
+message VirtualMachineSystemDisk {
+  string file = 1;
+  uint64 size_gib = 2;
+}
+
+message VirtualMachineConfig {
+  string name = 1;
+  VirtualMachineState state = 2;
+  bool running = 3;
+  uint32 persistent_virtual_cpu_count = 4;
+  uint64 persistent_memory_mib = 5;
+  uint32 live_virtual_cpu_count = 6;
+  uint64 live_memory_mib = 7;
+  VirtualMachineSystemDisk system_disk = 8;
+}
+// libvirt存在--config和--live live是不落盘的并且对运行的小鸡当前就生效，--config是落盘需要重开小鸡的
+// In libvirt, configurations support `--config` and `--live` flags:
+// `--live` applies directly to the currently running instance without persisting to disk;
+// `--config` persists changes to disk, which take effect only after rebooting the VM.
+message VirtualMachineConfigReply {
+  VirtualMachineConfig config = 1;
+}
+
+message UpdateVirtualMachineConfigRequest {
+  string name = 1;
+  optional uint32 virtual_cpu_count = 2;
+  optional uint64 memory_mib = 3;
+  bool apply_live = 4;
+}
+
+message UpdateVirtualMachineConfigReply {
+  bool persistent_applied = 1;
+  bool live_applied = 2;
+  string live_message = 3;
+  uint32 persistent_virtual_cpu_count = 4;
+  uint64 persistent_memory_mib = 5;
+  uint32 live_virtual_cpu_count = 6;
+  uint64 live_memory_mib = 7;
+}
+
+message ResizeVirtualMachineDiskRequest {
+  string name = 1;
+  uint64 size_gib = 2;
+}
+
+message ResizeVirtualMachineDiskReply {
+  VirtualMachineSystemDisk system_disk = 1;
+}
+
 message OpenVncConsoleRequest {
   string name = 1;
 }
 
 message OpenVncConsoleReply {
   string session_id = 1;
+  string password = 2;
 }
-
+// h2 vnc透传
+// HTTP/2 streaming proxy frame for VNC traffic.
 message VncProxyFrame {
   string session_id = 1;
   bytes data = 2;

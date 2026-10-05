@@ -3,6 +3,7 @@ using Grpc.Core.Interceptors;
 
 namespace Control.Services;
 
+/// <summary>集群 gRPC 客户端拦截器，为每个调用附加认证令牌请求头。</summary>
 public sealed class ClusterAuthenticationInterceptor(string token) : Interceptor
 {
     private const string TokenHeader = "x-kvmcontrol-token";

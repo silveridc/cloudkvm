@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 
 namespace Control.Model.Response;
 
+/// <summary>统一 API 响应包装：状态码、消息、数据与时间戳。</summary>
 public sealed class Response<T>(int status, string message, T? data = default)
 {
     public int Status { get; set; } = status;
@@ -14,9 +15,10 @@ public sealed class Response<T>(int status, string message, T? data = default)
     public long Time { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 }
 
+/// <summary>构建统一响应 JSON 的辅助方法集。</summary>
 public static class Response
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    private static readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
@@ -28,7 +30,7 @@ public static class Response
         context.Response.Clear();
         context.Response.StatusCode = httpStatusCode;
         context.Response.ContentType = "application/json; charset=utf-8";
-        await context.Response.WriteAsJsonAsync(new Response<object?>((int)status, message), JsonOptions);
+        await context.Response.WriteAsJsonAsync(new Response<object?>((int)status, message), _jsonOptions);
     }
 
     public static JsonResult Success<T>(string message, T data, int httpStatusCode = StatusCodes.Status200OK)

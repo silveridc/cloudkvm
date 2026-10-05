@@ -1,4 +1,6 @@
-namespace Cluster.Services;
+using Cluster.Services;
+
+namespace Cluster.Interface;
 
 public interface IVirtualMachineProvisioner
 {
